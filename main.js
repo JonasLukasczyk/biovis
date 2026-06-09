@@ -2,8 +2,7 @@ import * as THREE from "three";
 import { ConvexGeometry } from "three/addons/geometries/ConvexGeometry.js";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
-import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
-import { BloomPass } from "three/addons/postprocessing/BloomPass.js";
+import { SSAARenderPass } from "three/addons/postprocessing/SSAARenderPass.js";
 import { FilmPass } from "three/addons/postprocessing/FilmPass.js";
 
 import {
@@ -34,10 +33,20 @@ const Renderer = {
     Renderer.camera.position.set(0, 1, 15);
 
     Renderer.renderer = new THREE.WebGLRenderer({
-      antialias: true,
+      antialias: false,
     });
+    Renderer.renderer.setPixelRatio(window.devicePixelRatio);
     Renderer.renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(Renderer.renderer.domElement);
+
+    const composer = new EffectComposer(Renderer.renderer);
+    // const renderPass = new RenderPass(Renderer.scene, Renderer.camera);
+    const renderPass = new SSAARenderPass(Renderer.scene, Renderer.camera);
+    renderPass.sampleLevel = 64;
+    composer.addPass(renderPass);
+    const effectFilm = new FilmPass(0.3);
+    composer.addPass(effectFilm);
+    Renderer.composer = composer;
 
     const nodeData = nodes_
       .split("\n")
@@ -82,6 +91,7 @@ const Renderer = {
 
     const clusterIds = [...new Set(nodes.flatMap((node) => node.clusters))];
     console.log(clusterIds.map((c) => `"${c}":""`).join(","));
+    Renderer.offsets = [70,-80,0,-30,30,0,0,0,0,0,0,-70,0,0,0,-50];
     const clusterLabels = {
       "Protein biosynthesis": "Biosynthesis",
       "ribosome biogenesis": "Biogenesis",
@@ -279,9 +289,9 @@ const Renderer = {
     const clusterCenters2 = clusterNodes.map(
       (n) =>
         new THREE.Vector3(
-          n.x * SCALEX + (Math.random() - 0.5) * 0,
-          n.y * SCALEY + (Math.random() - 0.5) * 1,
-          n.z * SCALEZ + (Math.random() - 0.5) * 0,
+          n.x * SCALEX,
+          n.y * SCALEY,
+          n.z * SCALEZ
         ),
     );
     Renderer.clusterCenters = clusterCenters2;
@@ -421,12 +431,13 @@ const Renderer = {
 
     for (let i in Renderer.labels) {
       const pos = Renderer.worldToScreen(Renderer.clusterCenters[i]);
-      Renderer.labels[i].style.top = `${parseInt(pos.y)}px`;
+      Renderer.labels[i].style.top = `${parseInt(pos.y)+Renderer.offsets[i]}px`;
       Renderer.labels[i].style.left = `${parseInt(pos.x)}px`;
       Renderer.labels[i].style.zIndex = 1000 - parseInt(pos.z * 1000);
     }
 
-    Renderer.renderer.render(Renderer.scene, Renderer.camera);
+    // Renderer.renderer.render(Renderer.scene, Renderer.camera);
+    Renderer.composer.render();
   },
 };
 
