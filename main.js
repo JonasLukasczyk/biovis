@@ -5,6 +5,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { SSAARenderPass } from "three/addons/postprocessing/SSAARenderPass.js";
 import { FilmPass } from "three/addons/postprocessing/FilmPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 
 import {
   forceSimulation,
@@ -21,6 +22,15 @@ const SCALEY = 0.004;
 const SCALEZ = 0.008;
 const COLORN = 16;
 
+// =======================================
+// BLOOM SETTINGS - ADJUST THESE VALUES
+// =======================================
+const BLOOM = {
+  strength: 0.2,
+  radius: 0.5,
+  threshold: 0.01,
+};
+
 const Renderer = {
   init: () => {
     Renderer.scene = new THREE.Scene();
@@ -36,24 +46,82 @@ const Renderer = {
     Renderer.renderer = new THREE.WebGLRenderer({
       antialias: false,
     });
+
     Renderer.renderer.setPixelRatio(window.devicePixelRatio);
     Renderer.renderer.setSize(window.innerWidth, window.innerHeight);
+
+    // Preserve the original color rendering.
+    Renderer.renderer.toneMapping = THREE.NoToneMapping;
+
     document.body.appendChild(Renderer.renderer.domElement);
 
+    // =======================================
+    // POSTPROCESSING
+    // =======================================
     const composer = new EffectComposer(Renderer.renderer);
+
+    // Original anti-aliasing
     // const renderPass = new RenderPass(Renderer.scene, Renderer.camera);
-    const renderPass = new SSAARenderPass(Renderer.scene, Renderer.camera);
+    const renderPass = new SSAARenderPass(
+      Renderer.scene,
+      Renderer.camera
+    );
+
     renderPass.sampleLevel = 64;
     composer.addPass(renderPass);
+
+    // =======================================
+    // COLOR-PRESERVING UNREAL BLOOM
+    // =======================================
+
+    Renderer.bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(
+        4*window.innerWidth,
+        4*window.innerHeight
+      ),
+      BLOOM.strength,
+      BLOOM.radius,
+      BLOOM.threshold,
+    );
+
+    // UnrealBloomPass normally uses additive blending.
+    // This adds glow brightness to the original image,
+    // potentially washing saturated colors toward white.
+    //
+    // Maximum blending instead keeps the brighter value
+    // of each RGB channel. It allows the colored halo
+    // to extend outward without accumulating as much
+    // additional brightness over the original geometry.
+
+    const blend = Renderer.bloomPass.blendMaterial;
+
+    blend.blending = THREE.CustomBlending;
+    blend.blendEquation = THREE.MaxEquation;
+    blend.blendSrc = THREE.OneFactor;
+    blend.blendDst = THREE.OneFactor;
+
+    composer.addPass(Renderer.bloomPass);
+
+    // Original film effect
     const effectFilm = new FilmPass(0.3);
     composer.addPass(effectFilm);
+
+    // No OutputPass: preserve the original output pipeline.
     Renderer.composer = composer;
+
+    // =======================================
+    // GRAPH DATA
+    // =======================================
 
     const nodeData = nodes_
       .split("\n")
       .map((r) => r.split(",").map((rr) => rr.trim()));
+
     const nodes = nodeData.map((r) => {
-      return { id: r[0], clusters: r[2].split("/").map((rr) => rr.trim()) };
+      return {
+        id: r[0],
+        clusters: r[2].split("/").map((rr) => rr.trim())
+      };
     });
 
     const graphLinks = edges_
@@ -62,6 +130,10 @@ const Renderer = {
       .map((r) => {
         return { source: r[0], target: r[1] };
       });
+
+    // =======================================
+    // ORIGINAL COLORS - UNCHANGED
+    // =======================================
 
     Renderer.colors = [
       new THREE.Color(0xec385d),
@@ -83,16 +155,28 @@ const Renderer = {
     ];
 
     Renderer.colors_ = new Float32Array(Renderer.colors.length * 3);
+
     for (let i = 0; i < Renderer.colors.length; i++) {
       const c = Renderer.colors[i];
+
       Renderer.colors_[i * 3 + 0] = c.r;
       Renderer.colors_[i * 3 + 1] = c.g;
       Renderer.colors_[i * 3 + 2] = c.b;
     }
 
-    const clusterIds = [...new Set(nodes.flatMap((node) => node.clusters))];
-    console.log(clusterIds.map((c) => `"${c}":""`).join(","));
-    Renderer.offsets = [70,-80,0,-30,30,0,0,0,0,0,0,-70,0,0,0,-50];
+    const clusterIds = [
+      ...new Set(nodes.flatMap((node) => node.clusters))
+    ];
+
+    console.log(
+      clusterIds.map((c) => `"${c}":""`).join(",")
+    );
+
+    Renderer.offsets = [
+      70, -80, 0, -30, 30, 0, 0, 0,
+      0, 0, 0, -70, 0, 0, 0, -50
+    ];
+
     const clusterLabels = {
       "Protein biosynthesis": "Biosynthesis",
       "ribosome biogenesis": "Biogenesis",
@@ -111,16 +195,30 @@ const Renderer = {
       "Phytohormone action": "Phytohormone",
       "auxin perception and signal transduction": "Auxin",
     };
+
+    // =======================================
+    // HTML LABELS
+    // =======================================
+
     Renderer.labels = [];
+
     for (let i in clusterIds) {
       const div = document.createElement("div");
+
       div.classList.add("test");
       div.innerHTML = clusterLabels[clusterIds[i]];
-      if (!div.innerHTML) div.style.display = "None";
-      div.style.color = `rgb(${[Renderer.colors[i % COLORN].r, Renderer.colors[i % COLORN].g, Renderer.colors[i % COLORN].b].map((x) => parseInt(x * 255) + "").join(",")})`;
 
-      // Keep labels in a stable layer above the canvas. The CSS "translate"
-      // property moves them without replacing any transform from the .test CSS.
+      if (!div.innerHTML) {
+        div.style.display = "none";
+      }
+
+      div.style.color = `rgb(${[
+        Renderer.colors[i % COLORN].r,
+        Renderer.colors[i % COLORN].g,
+        Renderer.colors[i % COLORN].b
+      ].map((x) => parseInt(x * 255) + "").join(",")})`;
+
+      // Smooth positioning without flickering
       div.style.position = "fixed";
       div.style.top = "0";
       div.style.left = "0";
@@ -130,6 +228,10 @@ const Renderer = {
       document.body.appendChild(div);
       Renderer.labels.push(div);
     }
+
+    // =======================================
+    // CLUSTER NODES
+    // =======================================
 
     const clusterNodes = clusterIds.map((id) => ({
       id: `cluster:${id}`,
@@ -163,21 +265,42 @@ const Renderer = {
       Renderer.simulation.tick();
     }
 
-    const visibleNodes = simulationNodes.filter((node) => !node.isCluster);
+    const visibleNodes = simulationNodes.filter(
+      (node) => !node.isCluster
+    );
 
-    const clusterNodes_ = simulationNodes.filter((n) => n.isCluster);
-    Renderer.nodeMesh = Renderer.createNodeMesh(visibleNodes, clusterNodes_);
-    Renderer.edgeMesh = Renderer.createEdgeMesh(graphLinks, clusterNodes_);
+    const clusterNodes_ = simulationNodes.filter(
+      (n) => n.isCluster
+    );
+
+    Renderer.nodeMesh = Renderer.createNodeMesh(
+      visibleNodes,
+      clusterNodes_
+    );
+
+    Renderer.edgeMesh = Renderer.createEdgeMesh(
+      graphLinks,
+      clusterNodes_
+    );
 
     Renderer.scene.add(Renderer.nodeMesh);
     Renderer.scene.add(Renderer.edgeMesh);
 
-    // clusters
+    // =======================================
+    // OPTIONAL CLUSTER GEOMETRY
+    // =======================================
+
     if (false) {
       const nodesByCluster = {};
-      for (let cid of clusterIds) nodesByCluster[cid] = [];
+
+      for (let cid of clusterIds) {
+        nodesByCluster[cid] = [];
+      }
+
       for (let n of nodes) {
-        for (let c of n.clusters) nodesByCluster[c].push(n);
+        for (let c of n.clusters) {
+          nodesByCluster[c].push(n);
+        }
       }
 
       let ci = 0;
@@ -195,6 +318,7 @@ const Renderer = {
         );
 
         const geometry = new ConvexGeometry(points);
+
         const material = new THREE.MeshBasicMaterial({
           color: Renderer.colors[ci % COLORN],
           transparent: true,
@@ -204,6 +328,7 @@ const Renderer = {
         });
 
         const mesh = new THREE.Mesh(geometry, material);
+
         Renderer.scene.add(mesh);
         ci++;
       }
@@ -211,6 +336,10 @@ const Renderer = {
 
     Renderer.animate();
   },
+
+  // =======================================
+  // NODE MESH
+  // =======================================
 
   createNodeMesh: (nodes, clusterNodes) => {
     const geometry = new THREE.SphereGeometry(0.04, 16, 16);
@@ -220,7 +349,12 @@ const Renderer = {
         clusterCount: { value: clusterNodes.length },
         clusterCenters: {
           value: clusterNodes.map(
-            (n) => new THREE.Vector3(n.x * SCALEX, n.y * SCALEY, n.z * SCALEZ),
+            (n) =>
+              new THREE.Vector3(
+                n.x * SCALEX,
+                n.y * SCALEY,
+                n.z * SCALEZ
+              ),
           ),
         },
         clusterColors: { value: Renderer.colors_ },
@@ -266,13 +400,23 @@ const Renderer = {
   `,
     });
 
-    const mesh = new THREE.InstancedMesh(geometry, nodeMaterial, nodes.length);
+    const mesh = new THREE.InstancedMesh(
+      geometry,
+      nodeMaterial,
+      nodes.length
+    );
 
     const dummy = new THREE.Object3D();
 
     nodes.forEach((node, index) => {
-      dummy.position.set(node.x * SCALEX, node.y * SCALEY, node.z * SCALEZ);
+      dummy.position.set(
+        node.x * SCALEX,
+        node.y * SCALEY,
+        node.z * SCALEZ
+      );
+
       const r = Math.random() * 1.5 + 0.5;
+
       dummy.scale.set(r, r, r);
       dummy.updateMatrix();
 
@@ -284,17 +428,32 @@ const Renderer = {
     return mesh;
   },
 
+  // =======================================
+  // EDGE MESH
+  // =======================================
+
   createEdgeMesh: (links, clusterNodes) => {
     const radius = 0.013;
 
-    const geometry = new THREE.CylinderGeometry(radius, radius, 1, 6);
+    const geometry = new THREE.CylinderGeometry(
+      radius,
+      radius,
+      1,
+      6
+    );
 
     const startColors = new Float32Array(links.length * 3);
     const endColors = new Float32Array(links.length * 3);
 
     const clusterCenters = clusterNodes.map(
-      (n) => new THREE.Vector3(n.x * SCALEX, n.y * SCALEY, n.z * SCALEZ),
+      (n) =>
+        new THREE.Vector3(
+          n.x * SCALEX,
+          n.y * SCALEY,
+          n.z * SCALEZ
+        ),
     );
+
     const clusterCenters2 = clusterNodes.map(
       (n) =>
         new THREE.Vector3(
@@ -303,6 +462,7 @@ const Renderer = {
           n.z * SCALEZ
         ),
     );
+
     Renderer.clusterCenters = clusterCenters2;
 
     const getClosestClusterIndex = (point) => {
@@ -323,6 +483,7 @@ const Renderer = {
 
     const edgeMaterial = new THREE.ShaderMaterial({
       transparent: true,
+
       vertexShader: `
       attribute vec3 instanceStartColor;
       attribute vec3 instanceEndColor;
@@ -353,7 +514,11 @@ const Renderer = {
     `,
     });
 
-    const mesh = new THREE.InstancedMesh(geometry, edgeMaterial, links.length);
+    const mesh = new THREE.InstancedMesh(
+      geometry,
+      edgeMaterial,
+      links.length
+    );
 
     const dummy = new THREE.Object3D();
 
@@ -369,18 +534,33 @@ const Renderer = {
       const source = link.source;
       const target = link.target;
 
-      start.set(source.x * SCALEX, source.y * SCALEY, source.z * SCALEZ);
-      end.set(target.x * SCALEX, target.y * SCALEY, target.z * SCALEZ);
+      start.set(
+        source.x * SCALEX,
+        source.y * SCALEY,
+        source.z * SCALEZ
+      );
+
+      end.set(
+        target.x * SCALEX,
+        target.y * SCALEY,
+        target.z * SCALEZ
+      );
 
       direction.subVectors(end, start);
 
       const length = direction.length();
+
       if (length === 0) continue;
 
       midpoint.copy(start).add(end).multiplyScalar(0.5);
 
       dummy.position.copy(midpoint);
-      dummy.quaternion.setFromUnitVectors(yAxis, direction.normalize());
+
+      dummy.quaternion.setFromUnitVectors(
+        yAxis,
+        direction.normalize()
+      );
+
       dummy.scale.set(1, length, 1);
       dummy.updateMatrix();
 
@@ -389,8 +569,13 @@ const Renderer = {
       const startClusterIndex = getClosestClusterIndex(start);
       const endClusterIndex = getClosestClusterIndex(end);
 
-      const startColor = Renderer.colors[startClusterIndex % COLORN];
-      const endColor = Renderer.colors[endClusterIndex % COLORN];
+      const startColor = Renderer.colors[
+        startClusterIndex % COLORN
+      ];
+
+      const endColor = Renderer.colors[
+        endClusterIndex % COLORN
+      ];
 
       startColors[index * 3 + 0] = startColor.r;
       startColors[index * 3 + 1] = startColor.g;
@@ -419,14 +604,22 @@ const Renderer = {
     return mesh;
   },
 
+  // =======================================
+  // PROJECT 3D POSITIONS TO SCREEN
+  // =======================================
+
   worldToScreen: (position, canvasRect) => {
     const p = position.clone().project(Renderer.camera);
 
     return {
-      // Use CSS-pixel viewport coordinates, including the canvas offset.
-      x: canvasRect.left + (p.x * 0.5 + 0.5) * canvasRect.width,
-      y: canvasRect.top + (-p.y * 0.5 + 0.5) * canvasRect.height,
-      // Do not position labels for points behind or outside the camera depth.
+      x:
+        canvasRect.left +
+        (p.x * 0.5 + 0.5) * canvasRect.width,
+
+      y:
+        canvasRect.top +
+        (-p.y * 0.5 + 0.5) * canvasRect.height,
+
       visible:
         Number.isFinite(p.x) &&
         Number.isFinite(p.y) &&
@@ -436,24 +629,37 @@ const Renderer = {
     };
   },
 
+  // =======================================
+  // ANIMATION
+  // =======================================
+
   animate: () => {
     requestAnimationFrame(Renderer.animate);
 
-    const t = performance.now() * 0.00005; // orbit speed
+    const t = performance.now() * 0.00005;
     const radius = 30;
-    Renderer.camera.position.set(Math.cos(t) * radius, 2, Math.sin(t) * radius);
+
+    Renderer.camera.position.set(
+      Math.cos(t) * radius,
+      2,
+      Math.sin(t) * radius
+    );
+
     Renderer.camera.lookAt(0, 0, 0);
 
-    // Update the camera BEFORE projecting labels. Otherwise their positions
-    // use last frame's camera matrix while the graph uses this frame's matrix.
+    // Synchronize camera before projecting labels.
     Renderer.camera.updateMatrixWorld();
 
-    // Read canvas bounds once per frame to avoid repeated layout measurements.
-    const canvasRect = Renderer.renderer.domElement.getBoundingClientRect();
+    const canvasRect =
+      Renderer.renderer.domElement.getBoundingClientRect();
 
     for (let i = 0; i < Renderer.labels.length; i++) {
       const label = Renderer.labels[i];
-      const pos = Renderer.worldToScreen(Renderer.clusterCenters[i], canvasRect);
+
+      const pos = Renderer.worldToScreen(
+        Renderer.clusterCenters[i],
+        canvasRect
+      );
 
       if (!pos.visible) {
         label.style.visibility = "hidden";
@@ -462,14 +668,12 @@ const Renderer = {
 
       label.style.visibility = "visible";
 
-      // Subpixel CSS translation prevents pixel snapping and avoids layout
-      // changes from rewriting top/left. Leave z-index fixed to avoid flashing
-      // when labels overlap as the camera orbits.
       const offset = Renderer.offsets[i] ?? 0;
-      label.style.translate = `${pos.x}px ${pos.y + offset}px`;
+
+      label.style.translate =
+        `${pos.x}px ${pos.y + offset}px`;
     }
 
-    // Renderer.renderer.render(Renderer.scene, Renderer.camera);
     Renderer.composer.render();
   },
 };
