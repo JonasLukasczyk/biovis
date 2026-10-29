@@ -25,8 +25,14 @@
         background-color:black;
       }
       .test {
+        position: fixed;
+        top: 0;
+        left: 0;
+        z-index: 10;
+        pointer-events: none;
+        will-change: transform;
+
         background-color: #010101;
-        position: absolute;
         font-size: 1.25em;
         font-family: Sans;
         padding: 0.1em 0.2em;

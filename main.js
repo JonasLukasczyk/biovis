@@ -1,3 +1,4 @@
+
 import * as THREE from "three";
 import { ConvexGeometry } from "three/addons/geometries/ConvexGeometry.js";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
@@ -117,6 +118,14 @@ const Renderer = {
       div.innerHTML = clusterLabels[clusterIds[i]];
       if (!div.innerHTML) div.style.display = "None";
       div.style.color = `rgb(${[Renderer.colors[i % COLORN].r, Renderer.colors[i % COLORN].g, Renderer.colors[i % COLORN].b].map((x) => parseInt(x * 255) + "").join(",")})`;
+
+      // Keep labels in a stable layer above the canvas. The CSS "translate"
+      // property moves them without replacing any transform from the .test CSS.
+      div.style.position = "fixed";
+      div.style.top = "0";
+      div.style.left = "0";
+      div.style.zIndex = "10";
+      div.style.willChange = "translate";
 
       document.body.appendChild(div);
       Renderer.labels.push(div);
@@ -410,14 +419,20 @@ const Renderer = {
     return mesh;
   },
 
-  worldToScreen: (position) => {
+  worldToScreen: (position, canvasRect) => {
     const p = position.clone().project(Renderer.camera);
 
     return {
-      x: (p.x * 0.5 + 0.5) * Renderer.renderer.domElement.clientWidth,
-      y: (-p.y * 0.5 + 0.5) * Renderer.renderer.domElement.clientHeight,
-      z: p.z,
-      // visible: p.z >= -1 && p.z <= 1,
+      // Use CSS-pixel viewport coordinates, including the canvas offset.
+      x: canvasRect.left + (p.x * 0.5 + 0.5) * canvasRect.width,
+      y: canvasRect.top + (-p.y * 0.5 + 0.5) * canvasRect.height,
+      // Do not position labels for points behind or outside the camera depth.
+      visible:
+        Number.isFinite(p.x) &&
+        Number.isFinite(p.y) &&
+        Number.isFinite(p.z) &&
+        p.z >= -1 &&
+        p.z <= 1,
     };
   },
 
@@ -429,11 +444,29 @@ const Renderer = {
     Renderer.camera.position.set(Math.cos(t) * radius, 2, Math.sin(t) * radius);
     Renderer.camera.lookAt(0, 0, 0);
 
-    for (let i in Renderer.labels) {
-      const pos = Renderer.worldToScreen(Renderer.clusterCenters[i]);
-      Renderer.labels[i].style.top = `${parseInt(pos.y)+Renderer.offsets[i]}px`;
-      Renderer.labels[i].style.left = `${parseInt(pos.x)}px`;
-      Renderer.labels[i].style.zIndex = 1000 - parseInt(pos.z * 1000);
+    // Update the camera BEFORE projecting labels. Otherwise their positions
+    // use last frame's camera matrix while the graph uses this frame's matrix.
+    Renderer.camera.updateMatrixWorld();
+
+    // Read canvas bounds once per frame to avoid repeated layout measurements.
+    const canvasRect = Renderer.renderer.domElement.getBoundingClientRect();
+
+    for (let i = 0; i < Renderer.labels.length; i++) {
+      const label = Renderer.labels[i];
+      const pos = Renderer.worldToScreen(Renderer.clusterCenters[i], canvasRect);
+
+      if (!pos.visible) {
+        label.style.visibility = "hidden";
+        continue;
+      }
+
+      label.style.visibility = "visible";
+
+      // Subpixel CSS translation prevents pixel snapping and avoids layout
+      // changes from rewriting top/left. Leave z-index fixed to avoid flashing
+      // when labels overlap as the camera orbits.
+      const offset = Renderer.offsets[i] ?? 0;
+      label.style.translate = `${pos.x}px ${pos.y + offset}px`;
     }
 
     // Renderer.renderer.render(Renderer.scene, Renderer.camera);
