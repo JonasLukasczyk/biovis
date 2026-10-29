@@ -67,7 +67,7 @@ const Renderer = {
       Renderer.camera
     );
 
-    renderPass.sampleLevel = 64;
+    renderPass.sampleLevel = 2;
     composer.addPass(renderPass);
 
     // =======================================
